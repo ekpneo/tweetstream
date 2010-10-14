@@ -173,52 +173,55 @@ module TweetStream
         @on_error
       end
     end
-    
-    def user_stream(&block)
-      stream_options = {
-        :path => '/2/user.json',
-        :ssl => true,
-        :host => 'userstream.twitter.com',
-        :method => 'GET',
-        :user_agent => 'TweetStream',
-        :oauth => @options[:oauth]        
-      }
-      EventMachine::run {
-        @stream = Twitter::JSONStream.connect(stream_options)
-        
-        @stream.each_item do |item|
-          yield item
-        end
-        
-        # TODO this should behave like 'start' does
-        @stream.on_error do |message|
-          p message
-        end
-      }
+
+    def on_friends(&block)
+      if block_given?
+        @on_friends = block
+        self
+      else
+        @on_friends
+      end
+    end
+
+    def user_stream(query_parameters={}, &block)
+      query_parameters[:method] = :get
+      query_parameters[:ssl] = true
+      query_parameters[:host] = 'userstream.twitter.com'
+      start('/2/user', query_parameters, &block)
     end
     
     def start(path, query_parameters = {}, &block) #:nodoc:
       method = query_parameters.delete(:method) || :get
+      host = query_parameters.delete(:host) || 'stream.twitter.com'
+      ssl = query_parameters.delete(:ssl) || false
       delete_proc = query_parameters.delete(:delete) || self.on_delete
       limit_proc = query_parameters.delete(:limit) || self.on_limit
       error_proc = query_parameters.delete(:error) || self.on_error
+      friends_proc = query_parameters.delete(:friends) || self.on_friends
       
       uri = method == :get ? build_uri(path, query_parameters) : build_uri(path)
       
       stream_options = {
-        :path => uri,
+        :path => uri.to_s,
+        :host => host,
         :method => method.to_s.upcase,
         :content => (method == :post ? build_post_body(query_parameters) : ''),
         :user_agent => 'TweetStream',
-        :auth => "#{URI.encode @options[:username]}:#{URI.encode @options[:password]}"
+        :ssl => ssl
       }
-            
+
+      if @options.has_key? :oauth
+        stream_options[:oauth] = @options[:oauth]
+      else
+        stream_options[:auth] = "#{URI.encode @options[:username]}:#{URI.encode @options[:password]}"
+      end
+
       EventMachine::run {
         @stream = Twitter::JSONStream.connect(stream_options)
-        
+
         @stream.each_item do |item|
           raw_hash = @parser.decode(item)
-          
+         
           unless raw_hash.is_a?(::Hash)
             error_proc.call("Unexpected JSON object in stream: #{item}")
             next
@@ -230,9 +233,11 @@ module TweetStream
             delete_proc.call(hash[:delete][:status][:id], hash[:delete][:status][:user_id]) if delete_proc.is_a?(Proc)
           elsif hash[:limit] && hash[:limit][:track]
             limit_proc.call(hash[:limit][:track]) if limit_proc.is_a?(Proc)
+          elsif hash[:friends]
+            friends_proc.call(hash[:friends]) if friends_proc.is_a?(Proc)
           elsif hash[:text] && hash[:user]
             @last_status = TweetStream::Status.new(hash)
-            
+
             # Give the block the option to receive either one
             # or two arguments, depending on its arity.
             case block.arity
@@ -273,7 +278,10 @@ module TweetStream
     end
     
     def build_uri(path, query_parameters = {}) #:nodoc:
-      URI.parse("/1/#{path}.json#{build_query_parameters(query_parameters)}")
+      if path[0] != ?/
+        path = "/1/#{path}"
+      end
+      URI.parse("#{path}.json#{build_query_parameters(query_parameters)}")
     end
 
     def build_query_parameters(query)
