@@ -184,8 +184,6 @@ module TweetStream
     end
 
     def user_stream(query_parameters={}, &block)
-      query_parameters[:method] = :get
-      query_parameters[:ssl] = true
       query_parameters[:host] = 'userstream.twitter.com'
       start('/2/user', query_parameters, &block)
     end
@@ -212,6 +210,7 @@ module TweetStream
 
       if @options.has_key? :oauth
         stream_options[:oauth] = @options[:oauth]
+        stream_options[:ssl] = true
       else
         stream_options[:auth] = "#{URI.encode @options[:username]}:#{URI.encode @options[:password]}"
       end
